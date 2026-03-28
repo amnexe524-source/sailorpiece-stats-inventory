@@ -1,10 +1,11 @@
 // =========================================================
-//  INVENTORY SERVER — SSE Edition
+//  INVENTORY SERVER — SSE Edition + Keep‑Alive Ping
 //  node server.js
 // =========================================================
-const http = require('http');
-const fs   = require('fs');
-const path = require('path');
+const http  = require('http');
+const https = require('https');   // <-- เพิ่มสำหรับ ping
+const fs    = require('fs');
+const path  = require('path');
 
 const PORT      = 3000;
 const HTML_FILE = path.join(__dirname, 'index.html');
@@ -41,6 +42,21 @@ function broadcast(payload) {
   }
   console.log(`[BROADCAST] → ${clients.size} client(s)`);
 }
+
+// ── Keep‑Alive Ping ─────────────────────────────────────
+function pingRender() {
+  https.get('https://nine99bro.onrender.com/', (res) => {
+    console.log(`[PING] ${res.statusCode} - ${new Date().toISOString()}`);
+    // consume response data to free up memory
+    res.resume();
+  }).on('error', (err) => {
+    console.error(`[PING] Error: ${err.message}`);
+  });
+}
+
+// ตั้ง interval ทุก 10 นาที (600,000 ms) และทำทันทีเมื่อ server เริ่ม
+setInterval(pingRender, 5 * 60 * 1000);
+pingRender();
 
 // ── server ───────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
@@ -136,6 +152,8 @@ server.listen(PORT, () => {
   console.log('║  POST /        ← Lua ส่งข้อมูลมาที่นี่   ║');
   console.log('║  GET  /events  ← SSE push ไปเว็บ         ║');
   console.log('║  GET  /        ← หน้าเว็บ Inventory       ║');
+  console.log('╠══════════════════════════════════════════╣');
+  console.log('║  Keep‑Alive Ping → nine99bro.onrender.com ║');
   console.log('╚══════════════════════════════════════════╝');
   console.log('');
 });
