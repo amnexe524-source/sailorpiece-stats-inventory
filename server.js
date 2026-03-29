@@ -46,7 +46,7 @@ function broadcast(payload) {
 
 // Keep-Alive Ping
 function pingRender() {
-  https.get('https://nine99bro.onrender.com/', (res) => {
+  https.get('https://sailorpiece-stats-inventory.onrender.com/', (res) => {
     console.log(`[PING] ${res.statusCode} - ${new Date().toISOString()}`);
     res.resume();
   }).on('error', (err) => {
@@ -172,7 +172,7 @@ server.listen(PORT, () => {
   console.log('║  GET  /events  ← SSE push ไปเว็บ         ║');
   console.log('║  GET  /        ← หน้าเว็บ                 ║');
   console.log('╠══════════════════════════════════════════╣');
-  console.log('║  Keep-Alive Ping → nine99bro.onrender.com ║');
+  console.log('║  Keep-Alive Ping → sailorpiece-stats-inventory.onrender.com ║');
   console.log('╚══════════════════════════════════════════╝');
   console.log('');
 });
