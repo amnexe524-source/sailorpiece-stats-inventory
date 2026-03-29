@@ -1,23 +1,25 @@
 // =========================================================
-//  INVENTORY SERVER — SSE Edition + Keep‑Alive Ping
+//  INVENTORY SERVER — SSE Edition + Stats + Keep-Alive
 //  node server.js
 // =========================================================
-const http  = require('http');
-const https = require('https');   // <-- เพิ่มสำหรับ ping
-const fs    = require('fs');
-const path  = require('path');
+const http   = require('http');
+const https  = require('https');
+const fs     = require('fs');
+const path   = require('path');
+const crypto = require('crypto');
 
 const PORT      = 3000;
 const HTML_FILE = path.join(__dirname, 'index.html');
 
 let latestInventory = null;
-let lastHash        = '';
+let latestStats     = null;
+let lastInvHash     = '';
+let lastStatsHash   = '';
 let lastReceived    = null;
+let lastStatsReceived = null;
 
-// SSE clients ที่เชื่อมอยู่
 const clients = new Set();
 
-// ── helpers ──────────────────────────────────────────────
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -34,7 +36,6 @@ function readBody(req) {
   });
 }
 
-// ส่ง SSE event ไปทุก client ที่เชื่อมอยู่
 function broadcast(payload) {
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
   for (const res of clients) {
@@ -43,18 +44,15 @@ function broadcast(payload) {
   console.log(`[BROADCAST] → ${clients.size} client(s)`);
 }
 
-// ── Keep‑Alive Ping ─────────────────────────────────────
+// Keep-Alive Ping
 function pingRender() {
   https.get('https://nine99bro.onrender.com/', (res) => {
     console.log(`[PING] ${res.statusCode} - ${new Date().toISOString()}`);
-    // consume response data to free up memory
     res.resume();
   }).on('error', (err) => {
     console.error(`[PING] Error: ${err.message}`);
   });
 }
-
-// ตั้ง interval ทุก 10 นาที (600,000 ms) และทำทันทีเมื่อ server เริ่ม
 setInterval(pingRender, 5 * 60 * 1000);
 pingRender();
 
@@ -66,27 +64,21 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204); return res.end();
   }
 
-  // ── POST / — รับข้อมูลจาก Lua ──
+  // ── POST / — รับ Inventory จาก Lua ──
   if (req.method === 'POST' && req.url === '/') {
     try {
       const body = await readBody(req);
-      const hash = require('crypto').createHash('md5').update(body).digest('hex');
-
-      // กรอง: ถ้าข้อมูลเหมือนเดิม ไม่ส่งต่อ
-      if (hash === lastHash) {
+      const hash = crypto.createHash('md5').update(body).digest('hex');
+      if (hash === lastInvHash) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ ok: true, changed: false }));
       }
-
-      const json   = JSON.parse(body);
-      lastHash        = hash;
+      const json      = JSON.parse(body);
+      lastInvHash     = hash;
       latestInventory = json;
       lastReceived    = new Date().toISOString();
-      console.log(`[${lastReceived}] ✅ ข้อมูลใหม่ (${Buffer.byteLength(body)} bytes) → push ไปเว็บ`);
-
-      // Push ทันทีเลย ไม่ต้องรอให้เว็บ poll
-      broadcast({ inventory: json, lastReceived: lastReceived });
-
+      console.log(`[INV] ✅ ข้อมูลใหม่ (${Buffer.byteLength(body)} bytes)`);
+      broadcast({ type: 'inventory', inventory: json, lastReceived });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, changed: true }));
     } catch (e) {
@@ -96,26 +88,52 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // ── GET /events — SSE endpoint ──
+  // ── POST /stats — รับ Stats + Wave จาก Lua ──
+  if (req.method === 'POST' && req.url === '/stats') {
+    try {
+      const body = await readBody(req);
+      const hash = crypto.createHash('md5').update(body).digest('hex');
+      if (hash === lastStatsHash) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, changed: false }));
+      }
+      const json          = JSON.parse(body);
+      lastStatsHash       = hash;
+      latestStats         = json;
+      lastStatsReceived   = new Date().toISOString();
+      console.log(`[STATS] ✅ ข้อมูลใหม่`);
+      broadcast({ type: 'stats', stats: json, lastReceived: lastStatsReceived });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, changed: true }));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Bad JSON' }));
+    }
+  }
+
+  // ── GET /events — SSE ──
   if (req.method === 'GET' && req.url === '/events') {
     res.writeHead(200, {
-      'Content-Type':  'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection':    'keep-alive',
+      'Content-Type':      'text/event-stream',
+      'Cache-Control':     'no-cache',
+      'Connection':        'keep-alive',
       'X-Accel-Buffering': 'no',
     });
 
     // ส่งข้อมูลปัจจุบันทันทีเมื่อเชื่อมครั้งแรก
     if (latestInventory) {
-      res.write(`data: ${JSON.stringify({ inventory: latestInventory, lastReceived })}\n\n`);
-    } else {
+      res.write(`data: ${JSON.stringify({ type:'inventory', inventory: latestInventory, lastReceived })}\n\n`);
+    }
+    if (latestStats) {
+      res.write(`data: ${JSON.stringify({ type:'stats', stats: latestStats, lastReceived: lastStatsReceived })}\n\n`);
+    }
+    if (!latestInventory && !latestStats) {
       res.write(`: connected\n\n`);
     }
 
     clients.add(res);
     console.log(`[SSE] client เชื่อมต่อ (รวม ${clients.size})`);
 
-    // Heartbeat ทุก 25 วิ กัน Render/proxy ตัดการเชื่อมต่อ
     const hb = setInterval(() => {
       try { res.write(`: ping\n\n`); } catch {}
     }, 25000);
@@ -149,11 +167,13 @@ server.listen(PORT, () => {
   console.log('╠══════════════════════════════════════════╣');
   console.log(`║  Local  : http://localhost:${PORT}           ║`);
   console.log('╠══════════════════════════════════════════╣');
-  console.log('║  POST /        ← Lua ส่งข้อมูลมาที่นี่   ║');
+  console.log('║  POST /        ← Inventory จาก Lua        ║');
+  console.log('║  POST /stats   ← Stats+Wave จาก Lua       ║');
   console.log('║  GET  /events  ← SSE push ไปเว็บ         ║');
-  console.log('║  GET  /        ← หน้าเว็บ Inventory       ║');
+  console.log('║  GET  /        ← หน้าเว็บ                 ║');
   console.log('╠══════════════════════════════════════════╣');
-  console.log('║  Keep‑Alive Ping → nine99bro.onrender.com ║');
+  console.log('║  Keep-Alive Ping → nine99bro.onrender.com ║');
   console.log('╚══════════════════════════════════════════╝');
   console.log('');
 });
+
